@@ -26,6 +26,8 @@ __pycache__/
 *.pyc
 *.test
 *.ipa
+*.apk
+*.aab
 *.zip
 .DS_Store
 xcuserdata/
@@ -33,6 +35,7 @@ xcuserdata/
 Config/Local.xcconfig
 local.properties
 .gradle/
+.kotlin/
 .idea/
 # Local instructions
 AGENTS.md
