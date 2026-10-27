@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import dev.podhod.core.requireHttps
+import dev.podhod.core.archiveJson
 import java.io.IOException
 import java.util.UUID
 import kotlin.coroutines.resume
@@ -27,6 +28,9 @@ class CloudAuthentication(context: Context, val serverURL: String) {
     private var authState = AuthState()
     private var pendingState: String? = null
     private val refreshMutex = Mutex()
+    private val profileMutex = Mutex()
+    private val mutableAccount = MutableStateFlow(AccountProfileState())
+    val accountProfile = mutableAccount.asStateFlow()
     private val mutableStatus = MutableStateFlow(AuthenticationStatus())
     val status = mutableStatus.asStateFlow()
     @Volatile var generation = UUID.randomUUID()
@@ -117,9 +121,47 @@ class CloudAuthentication(context: Context, val serverURL: String) {
             mutableStatus.value = AuthenticationStatus(true, message = "Вход выполнен")
         } finally { mutableStatus.value = mutableStatus.value.copy(busy = false) }
     }
-    suspend fun accessToken(): String = refreshMutex.withLock {
+    suspend fun refreshProfile() {
+        if (!status.value.signedIn || !profileMutex.tryLock()) return
+        val operation = generation
+        mutableAccount.value = mutableAccount.value.copy(loading = true, error = null)
+        try {
+            val config = withContext(Dispatchers.IO) { publicJSON(serverURL.trimEnd('/') + "/v1/config?platform=android") }
+            require(config.getString("clientID") == "podhod-android")
+            val issuer = requireHttps(config.getString("issuer")).toString().trimEnd('/')
+            for (attempt in 0..1) {
+                try {
+                    val token = accessToken(forceRefresh = attempt > 0)
+                    val expected = verifiedAccountID()
+                    val profile = archiveJson.decodeFromString<AccountProfile>(accountData("$issuer/account/", token))
+                    val links = archiveJson.decodeFromString<List<AccountLink>>(accountData("$issuer/account/linked-accounts", token))
+                    check(operation == generation)
+                    mutableAccount.value = AccountProfileState(details = AccountDetails(profile, links, expected))
+                    return
+                } catch (error: CloudFailure) {
+                    if (attempt == 0 && error.status in listOf(401, 403)) continue
+                    throw error
+                }
+            }
+        } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            if (operation == generation) mutableAccount.value = mutableAccount.value.copy(error = "Не удалось обновить профиль. Проверь соединение и повтори обновление.")
+        } finally {
+            if (operation == generation) mutableAccount.value = mutableAccount.value.copy(loading = false)
+            profileMutex.unlock()
+        }
+    }
+    private suspend fun accountData(url: String, token: String): String = withContext(Dispatchers.IO) {
+        requireHttps(url)
+        http.newCall(Request.Builder().url(url).header("Accept", "application/json").header("Authorization", "Bearer $token").build()).execute().use {
+            if (!it.isSuccessful) throw CloudFailure(it.code, "account_profile_unavailable")
+            it.body?.string() ?: throw IOException("Пустой профиль.")
+        }
+    }
+    suspend fun accessToken(forceRefresh: Boolean = false): String = refreshMutex.withLock {
         check(authState.isAuthorized)
         val operation = generation
+        if (forceRefresh) authState.setNeedsTokenRefresh(true)
         val token: String = suspendCancellableCoroutine { continuation ->
             authState.performActionWithFreshTokens(service) { access, _, error ->
                 if (continuation.isActive) {
@@ -136,6 +178,7 @@ class CloudAuthentication(context: Context, val serverURL: String) {
         generation = UUID.randomUUID()
         pendingState = null
         authState = AuthState()
+        mutableAccount.value = AccountProfileState()
         credentials.clear()
         mutableStatus.value = AuthenticationStatus(message = "Выполнен выход на этом устройстве")
     }

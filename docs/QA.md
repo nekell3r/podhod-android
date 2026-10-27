@@ -36,6 +36,8 @@
 | Подмена/отмена Telegram state | Подмена отклоняется без выдачи code; отмена сохраняет исходный client state и открывает login Keycloak | браузерная проверка callback с `error=access_denied` |
 | Account Console после входа | `sub`, audience `account`, собственные account roles; profile и linked-accounts возвращают HTTP 200 | backend deploy/tests, протокольная проверка полного code/PKCE flow и Account API |
 | Первоначальный owner | Realm import сохраняет стандартные права управления своим аккаунтом для привязки Telegram | backend deploy/tests, проверка эффективных ролей старой установки |
+| Профиль в клиентах | Отсутствующие имена заменяются логином; наличие провайдера не означает связь, чужой subject и дубликаты отклоняются | AccountProfileTest, iOS CloudAccountProfileTests |
+| Доступ к профилю | Только `view-profile`, profile и linked-accounts — 200; изменение связей — 403 | backend deploy/tests, полный code/PKCE flow обоих клиентов на действующем Keycloak |
 
 ```sh
 ./gradlew :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
